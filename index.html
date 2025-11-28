@@ -6,6 +6,7 @@
     <title>Конструктор Потоков Приложения (App Flow Constructor)</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="firebase-config.js"></script>
     <!-- Inter Font -->
     <style>
         body { 
@@ -305,14 +306,6 @@
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     
     // ВНИМАНИЕ: Для запуска на ВНЕШНЕМ сервере, замените данные ниже на вашу конфигурацию Firebase!
-    const customFirebaseConfig = {
-        apiKey: "AIzaSyDLL0XdOi1FuBPipMcTZVokIijcgYw--wU",
-        authDomain: "screen-database-442ea.firebaseapp.com",
-        projectId: "screen-database-442ea",
-        storageBucket: "screen-database-442ea.firebasestorage.app",
-        messagingSenderId: "1084761910892",
-        appId: "1:1084761910892:web:e812c4aced9ba11923b249"
-    };
 
     // Используем глобальную переменную если она есть (внутри Canvas), иначе используем customFirebaseConfig
     const firebaseConfig = (typeof __firebase_config !== 'undefined' && __firebase_config) 
