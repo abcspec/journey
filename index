@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конструктор Потоков Приложения (App Flow Constructor)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Основной контейнер для холста */
+        #canvas-area {
+            position: relative;
+            height: 100%; 
+            background-color: #f7f9fb;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
+            cursor: grab; 
+        }
+        
+        /* Курсор для режима рисования */
+        #canvas-area.draw-mode {
+            cursor: crosshair !important;
+        }
+
+        /* Рабочая область, которая масштабируется и переводится */
+        #workspace {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 5000px;
+            min-height: 5000px; 
+            transform-origin: 0 0;
+        }
+        
+        /* --- SIZE M (Средний) - Дефолтный --- */
+        /* Updated to 126x273px image size */
+        .screen-node {
+            position: absolute;
+            cursor: grab;
+            width: 126px; 
+            min-height: 313px; /* 273px image + ~40px for text/padding */
+            border: 2px solid #3b82f6;
+            background-color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
+            padding: 4px;
+            transition: width 0.3s, min-height 0.3s, border-color 0.2s;
+            z-index: 10; 
+        }
+        .screen-node.locked {
+            cursor: default;
+            border-color: #ef4444;
+        }
+        .screen-node:active:not(.locked) {
+            cursor: grabbing;
+        }
+        .screen-node.draw-source {
+            border-color: #10b981; /* Зеленый для активного источника */
+            box-shadow: 0 0 10px #10b981;
+        }
+        .screen-image {
+            width: 100%;
+            height: 273px; /* Updated height for Size M */
+            object-fit: cover;
+            border-radius: 0.25rem;
+            background-color: #e5e7eb;
+            transition: height 0.3s;
+        }
+        
+        /* --- SIZE S (Малый) --- */
+        .screen-node.size-s {
+            width: 100px;
+            min-height: 120px;
+        }
+        .screen-node.size-s .screen-image {
+            height: 80px;
+        }
+
+        /* --- SIZE L (Большой) - 328x828px --- */
+        .screen-node.size-l {
+            width: 328px;
+            min-height: 828px;
+        }
+        .screen-node.size-l .screen-image {
+            height: 780px;
+        }
+        
+        .screen-name {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #1f2937;
+            text-align: center;
+            margin-top: 4px;
+        }
+        /* Слой SVG для стрелок должен быть поверх холста, но под узлами */
+        #arrow-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 5;
+        }
+        /* Стили для модальных окон */
+        .custom-modal {
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 50;
+        }
+        /* NEW: Контейнер для меток, который масштабируется */
+        #flow-label-elements {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 15; 
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+        }
+        /* NEW: Стили для каждой метки */
+        .flow-label {
+            position: absolute;
+            padding: 4px 8px;
+            background-color: #f7f9fb;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #1f2937;
+            transform-origin: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            cursor: default; 
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#10b981',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+<!-- Модальное окно для ввода метки перехода -->
+<div id="flow-label-modal" class="custom-modal fixed inset-0 hidden items-center justify-center">
+    <div class="bg-white p-6 rounded-lg shadow-2xl w-full max-w-sm">
+        <h3 class="text-xl font-bold mb-4">Название Перехода</h3>
+        <p class="mb-4 text-sm text-gray-600" id="modal-flow-info"></p>
+        <input type="text" id="modal-flow-label-input" placeholder="Например: Tap Next Button, Login Success" class="w-full p-2 mb-4 border rounded-lg focus:ring-primary focus:border-primary">
+        <div class="flex justify-end space-x-3">
+            <button onclick="closeFlowModal()" class="bg-gray-300 text-gray-800 p-2 rounded-lg font-semibold hover:bg-gray-400 transition">
+                Отмена
+            </button>
+            <button onclick="saveDrawnFlow()" class="bg-secondary text-white p-2 rounded-lg font-semibold hover:bg-green-600 transition">
+                Сохранить
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- NEW: Модальное окно ПОДТВЕРЖДЕНИЯ (Замена alert/confirm) -->
+<div id="confirmation-modal" class="custom-modal fixed inset-0 hidden items-center justify-center">
+    <div class="bg-white p-6 rounded-lg shadow-2xl w-full max-w-sm border-l-4 border-red-500">
+        <h3 class="text-xl font-bold mb-4 text-gray-800">Подтверждение</h3>
+        <p class="mb-6 text-sm text-gray-600" id="confirmation-modal-message">Вы уверены?</p>
+        <div class="flex justify-end space-x-3">
+            <button onclick="closeConfirmationModal()" class="bg-gray-200 text-gray-800 p-2 rounded-lg font-semibold hover:bg-gray-300 transition">
+                Отмена
+            </button>
+            <button id="confirmation-confirm-btn" class="bg-red-600 text-white p-2 rounded-lg font-semibold hover:bg-red-700 transition">
+                Удалить
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Заголовок и верхний отступ -->
+<div class="container mx-auto p-4 md:p-8 flex-shrink-0">
+    <h1 class="text-3xl font-extrabold text-primary mb-6">Конструктор Потоков Приложения</h1>
+</div>
+
+<!-- Основной контейнер, который растягивается -->
+<div class="flex-grow container mx-auto px-4 md:px-8 pb-8 flex flex-col">
+
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-grow">
+
+        <!-- Sidebar / Панель Управления -->
+        <div class="lg:col-span-1 space-y-6 flex flex-col">
+
+            <!-- Блок 1: Добавить Скриншот -->
+            <div class="bg-white p-5 rounded-xl shadow-lg border border-gray-200">
+                <h2 class="text-lg font-bold mb-3 text-gray-700">1. Добавить Скриншот (Узел)</h2>
+                <input type="text" id="screen-name-input" placeholder="Название Скриншота (напр. Login)" class="w-full p-2 mb-2 border rounded-lg focus:ring-primary focus:border-primary">
+                <input type="url" id="image-url-input" placeholder="URL изображения (страница или прямая ссылка)" class="w-full p-2 mb-3 border rounded-lg focus:ring-primary focus:border-primary">
+                <button onclick="addScreen()" class="w-full bg-primary text-white p-2 rounded-lg font-semibold hover:bg-blue-600 transition">
+                    Добавить Скриншот
+                </button>
+                <p class="text-xs text-red-500 mt-2">
+                    *Внимание: Ссылки на Imgur (кроме альбомов) будут автоматически преобразованы.
+                </p>
+            </div>
+
+            <!-- Блок 2: Инструмент Соединения -->
+            <div class="bg-white p-5 rounded-xl shadow-lg border border-gray-200">
+                <h2 class="text-lg font-bold mb-3 text-gray-700">2. Соединение Скриншотов</h2>
+                <button id="draw-mode-toggle" onclick="toggleDrawMode()" class="w-full bg-yellow-500 text-white p-2 rounded-lg font-semibold hover:bg-yellow-600 transition">
+                    Включить режим соединения
+                </button>
+                <p id="draw-mode-status" class="text-sm text-yellow-700 mt-2">Текущий режим: Панорамирование</p>
+            </div>
+
+            <!-- Блок 3: Управление Проектами (NEW) -->
+            <div class="bg-white p-5 rounded-xl shadow-lg border border-gray-200">
+                <h2 class="text-lg font-bold mb-3 text-gray-700">3. Управление Проектами</h2>
+                
+                <!-- Селектор и удаление -->
+                <div class="flex items-center space-x-2 mb-3">
+                    <select id="project-select" onchange="switchProject(this.value)" class="flex-grow p-2 border rounded-lg focus:ring-primary focus:border-primary text-sm">
+                        <option value="" disabled selected>Загрузка...</option>
+                    </select>
+                    <button onclick="deleteCurrentProject()" class="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600 transition flex-shrink-0" title="Удалить текущий проект">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+
+                <!-- Добавление нового -->
+                <div class="flex items-center space-x-2">
+                    <input type="text" id="new-project-name" placeholder="Имя нового проекта" class="flex-grow p-2 border rounded-lg focus:ring-primary focus:border-primary text-sm">
+                    <button onclick="addProject()" class="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600 transition flex-shrink-0 font-bold px-3">
+                        +
+                    </button>
+                </div>
+            </div>
+
+            <!-- Блок "Инфо" -->
+            <div class="bg-yellow-100 p-4 rounded-lg text-sm text-yellow-800">
+                <p class="font-bold">Инструкции:</p>
+                <ul class="list-disc list-inside">
+                    <li>**Проекты:** Создавайте разные проекты в меню слева.</li>
+                    <li>**Скриншоты:** Перетаскивайте для перемещения.</li>
+                    <li>**Pan/Zoom:** ЛКМ по фону для перемещения, Колесо для зума.</li>
+                    <li>**Размер:** Кнопки +/- на узле.</li>
+                    <li>**Связи:** "Включить режим соединения" -> Исходный -> Целевой.</li>
+                    <li>**Удаление:** Корзина (слева внизу) или кнопка на узле.</li>
+                </ul>
+            </div>
+            
+            <div id="auth-status" class="text-sm text-center text-gray-500 mt-auto">
+                Статус: Загрузка...
+            </div>
+            <div id="user-id-display" class="text-xs text-center text-gray-400 truncate"></div>
+        </div>
+
+        <!-- Canvas Area / Холст -->
+        <div id="canvas-area-container" class="lg:col-span-3 bg-white p-4 rounded-xl shadow-lg border border-gray-200 relative flex-grow">
+            <div id="canvas-area" 
+                 onmousedown="handlePanZoomStart(event)" 
+                 onwheel="handleZoom(event)">
+
+                <div id="workspace">
+                    <!-- SVG для стрелок -->
+                    <svg id="arrow-svg"></svg>
+                    <line id="temp-line" x1="0" y1="0" x2="0" y2="0" stroke="#f59e0b" stroke-width="4" marker-end="url(#arrowhead-temp)" style="pointer-events: none;" opacity="0" />
+                    <!-- Контейнер для меток (HTML) -->
+                    <div id="flow-label-elements"></div>
+                    <!-- Скриншоты будут добавлены здесь -->
+                </div>
+            </div>
+            
+            <!-- Trash area / Корзина для удаления -->
+            <div id="trash-area" class="absolute bottom-4 left-4 p-4 bg-gray-200/50 backdrop-blur-sm rounded-lg border-2 border-dashed border-gray-400 text-gray-600 transition-all duration-300 flex items-center justify-center text-lg z-30 opacity-0 pointer-events-none w-48 h-16 transform scale-100">
+                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                Удалить скриншот
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- Firebase SDK -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, collection, query, onSnapshot, updateDoc, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // Глобальные переменные
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    let app, db, auth, userId = null;
+    
+    // Хранилища "сырых" данных (всех проектов)
+    let allScreens = {}; 
+    let allFlows = [];
+    let allProjects = []; // [{id, name, createdAt}]
+
+    // Отфильтрованные данные для текущего проекта
+    let screens = {};
+    let flows = [];
+    
+    // Состояние приложения
+    let currentProjectId = null;
+    let isDragging = false;
+    let activeNodeId = null;
+    let offsetX, offsetY;
+    const sizeOrder = ['s', 'm', 'l']; 
+    
+    // --- PAN/ZOOM STATE ---
+    let scale = 1;
+    let translateX = 0;
+    let translateY = 0;
+    let isPanning = false;
+    let panStartX, panStartY;
+
+    // --- DRAW FLOW STATE ---
+    let isDrawMode = false;
+    let drawingSourceId = null;
+    let tempLineElement = null;
+    let currentTargetId = null;
+
+    // Переменные для корзины
+    let trashAreaRect = null; 
+    let isOverTrash = false;
+    
+    // Переменная для действия подтверждения
+    let pendingConfirmationAction = null;
+
+    // --- FIREBASE ИНИЦИАЛИЗАЦИЯ ---
+    const initFirebase = async () => {
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            document.getElementById('auth-status').textContent = 'Статус: Авторизация...';
+            
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+                await signInAnonymously(auth);
+            }
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    document.getElementById('auth-status').textContent = 'Статус: Подключено';
+                    document.getElementById('user-id-display').textContent = 'User ID: ' + userId;
+                    loadData(); 
+                } else {
+                    document.getElementById('auth-status').textContent = 'Статус: Ошибка авторизации';
+                    userId = crypto.randomUUID();
+                }
+            });
+
+        } catch (error) {
+            console.error("Ошибка инициализации:", error);
+            document.getElementById('auth-status').textContent = 'Статус: Ошибка (см. консоль)';
+        }
+    };
+
+    // --- ЗАГРУЗКА ДАННЫХ ---
+    const getCollectionPath = (collectionName) => {
+        return `artifacts/${appId}/users/${userId}/${collectionName}`;
+    };
+
+    const loadData = () => {
+        if (!userId) return;
+
+        // 1. Подписка на Проекты
+        const projectsColRef = collection(db, getCollectionPath('projects'));
+        onSnapshot(projectsColRef, async (snapshot) => {
+            allProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            // Сортировка по времени создания (старые первыми)
+            allProjects.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+            // Если проектов нет, создаем дефолтный "Основной Проект"
+            if (allProjects.length === 0) {
+                console.log("Нет проектов. Создание дефолтного...");
+                await addDoc(projectsColRef, { name: "Основной Проект", createdAt: Date.now() });
+                // Snapshot сработает снова после добавления
+                return;
+            }
+
+            // Если текущий проект не выбран или был удален, выбираем первый
+            const currentExists = allProjects.find(p => p.id === currentProjectId);
+            if (!currentProjectId || !currentExists) {
+                currentProjectId = allProjects[0].id;
+            }
+            
+            updateProjectSelector();
+            filterAndRender();
+
+        }, (error) => console.error("Ошибка проектов:", error));
+
+        // 2. Подписка на Скриншоты (всех проектов)
+        const screensColRef = collection(db, getCollectionPath('screens'));
+        onSnapshot(screensColRef, (snapshot) => {
+            allScreens = {};
+            snapshot.docs.forEach(doc => {
+                allScreens[doc.id] = { id: doc.id, ...doc.data() };
+            });
+            filterAndRender();
+        }, (error) => console.error("Ошибка скриншотов:", error));
+
+        // 3. Подписка на Связи (всех проектов)
+        const flowsColRef = collection(db, getCollectionPath('flows'));
+        onSnapshot(flowsColRef, (snapshot) => {
+            allFlows = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            filterAndRender();
+        }, (error) => console.error("Ошибка связей:", error));
+    };
+
+    // --- ЛОГИКА ПРОЕКТОВ ---
+
+    const updateProjectSelector = () => {
+        const select = document.getElementById('project-select');
+        select.innerHTML = '';
+        
+        allProjects.forEach(p => {
+            const option = document.createElement('option');
+            option.value = p.id;
+            option.textContent = p.name;
+            option.selected = p.id === currentProjectId;
+            select.appendChild(option);
+        });
+    };
+
+    window.switchProject = (projectId) => {
+        currentProjectId = projectId;
+        filterAndRender();
+    };
+
+    window.addProject = async () => {
+        const nameInput = document.getElementById('new-project-name');
+        const name = nameInput.value.trim();
+        if (!name) {
+            alertMessage("Введите имя проекта", "error");
+            return;
+        }
+
+        try {
+            const projectsColRef = collection(db, getCollectionPath('projects'));
+            const docRef = await addDoc(projectsColRef, { name: name, createdAt: Date.now() });
+            nameInput.value = '';
+            currentProjectId = docRef.id; // Автоматически переключаемся на новый
+            alertMessage(`Проект "${name}" создан`, "success");
+        } catch (e) {
+            console.error(e);
+            alertMessage("Ошибка создания проекта", "error");
+        }
+    };
+
+    // --- NEW: LOGIC FOR CONFIRMATION MODAL ---
+
+    window.showConfirmationModal = (message, action) => {
+        const modal = document.getElementById('confirmation-modal');
+        const msgElement = document.getElementById('confirmation-modal-message');
+        const confirmBtn = document.getElementById('confirmation-confirm-btn');
+
+        msgElement.textContent = message;
+        pendingConfirmationAction = action;
+        
+        // Override onclick for the confirm button
+        confirmBtn.onclick = () => {
+            if (pendingConfirmationAction) {
+                pendingConfirmationAction();
+            }
+            closeConfirmationModal();
+        };
+
+        modal.style.display = 'flex';
+    };
+
+    window.closeConfirmationModal = () => {
+        document.getElementById('confirmation-modal').style.display = 'none';
+        pendingConfirmationAction = null;
+    };
+
+
+    window.deleteCurrentProject = async () => {
+        console.log("Attempting to delete project...");
+        if (!currentProjectId) {
+            console.warn("No current project selected.");
+            return;
+        }
+        if (allProjects.length <= 1) {
+            alertMessage("Нельзя удалить последний проект", "error");
+            return;
+        }
+
+        const project = allProjects.find(p => p.id === currentProjectId);
+
+        // Использование кастомного модального окна вместо confirm()
+        showConfirmationModal(
+            `Удалить проект "${project.name}" и ВСЕ его данные? Это действие необратимо.`,
+            async () => {
+                try {
+                    // 1. Удаляем скриншоты этого проекта
+                    const screensToDelete = Object.values(allScreens).filter(s => s.projectId === currentProjectId || (!s.projectId && currentProjectId === allProjects[0].id));
+                    const screenPromises = screensToDelete.map(s => deleteDoc(doc(db, getCollectionPath('screens'), s.id)));
+                    
+                    // 2. Удаляем связи этого проекта
+                    const screenIds = new Set(screensToDelete.map(s => s.id));
+                    const flowsToDelete = allFlows.filter(f => 
+                        (f.projectId === currentProjectId) || 
+                        (screenIds.has(f.sourceId) || screenIds.has(f.targetId))
+                    );
+                    const flowPromises = flowsToDelete.map(f => deleteDoc(doc(db, getCollectionPath('flows'), f.id)));
+                    
+                    // 3. Удаляем сам проект
+                    const projectPromise = deleteDoc(doc(db, getCollectionPath('projects'), currentProjectId));
+
+                    await Promise.all([...screenPromises, ...flowPromises, projectPromise]);
+                    alertMessage("Проект удален", "success");
+
+                } catch (e) {
+                    console.error("Delete project error:", e);
+                    alertMessage("Ошибка удаления проекта", "error");
+                }
+            }
+        );
+    };
+
+    // Фильтрация данных для текущего проекта
+    const filterAndRender = () => {
+        if (!currentProjectId || !allProjects.length) return;
+
+        const defaultProjectId = allProjects[0].id;
+        
+        screens = {};
+        Object.values(allScreens).forEach(s => {
+            if (s.projectId === currentProjectId) {
+                screens[s.id] = s;
+            } else if (!s.projectId && currentProjectId === defaultProjectId) {
+                screens[s.id] = s; // Legacy data
+            }
+        });
+
+        flows = allFlows.filter(f => screens[f.sourceId] && screens[f.targetId]);
+        renderCanvas();
+    };
+
+    // --- ОСНОВНОЙ ФУНКЦИОНАЛ (Добавление, Удаление, UI) ---
+
+    window.saveDrawnFlow = async () => {
+        const sourceId = drawingSourceId;
+        const targetId = currentTargetId;
+        const label = document.getElementById('modal-flow-label-input').value.trim();
+
+        if (!label) {
+            alertMessage("Пожалуйста, введите название перехода.", 'error');
+            return;
+        }
+
+        if (sourceId === targetId) {
+             alertMessage("Нельзя создать переход на тот же скриншот.", 'error');
+             return;
+        }
+        
+        const newFlow = {
+            sourceId,
+            targetId,
+            label,
+            projectId: currentProjectId,
+            createdAt: Date.now()
+        };
+
+        try {
+            const flowsColRef = collection(db, getCollectionPath('flows'));
+            await addDoc(flowsColRef, newFlow);
+            alertMessage("Переход успешно добавлен!", 'success');
+        } catch (e) {
+            console.error(e);
+            alertMessage("Ошибка сохранения перехода.", 'error');
+        } finally {
+            closeFlowModal();
+        }
+    };
+
+    window.addScreen = async () => {
+        if (!currentProjectId) {
+            alertMessage("Сначала создайте или выберите проект", "error");
+            return;
+        }
+        const name = document.getElementById('screen-name-input').value.trim();
+        const url = document.getElementById('image-url-input').value.trim();
+
+        if (!name || !url) {
+            console.error("Ошибка: Название и URL скриншота обязательны.");
+            alertMessage("Пожалуйста, заполните название и URL.", 'error');
+            return;
+        }
+        
+        const newScreen = {
+            name: name,
+            url: url,
+            x: -translateX / scale + 50 + Math.random() * 100, 
+            y: -translateY / scale + 50 + Math.random() * 100,
+            size: 'm', 
+            isLocked: false, 
+            projectId: currentProjectId, 
+            createdAt: Date.now()
+        };
+
+        try {
+            const screensColRef = collection(db, getCollectionPath('screens'));
+            await addDoc(screensColRef, newScreen);
+            
+            document.getElementById('screen-name-input').value = '';
+            document.getElementById('image-url-input').value = '';
+            alertMessage("Скриншот успешно добавлен!", 'success');
+        } catch (e) {
+            console.error("Ошибка добавления:", e);
+            alertMessage("Ошибка сохранения скриншота.", 'error');
+        }
+    };
+
+    window.deleteScreen = async (screenId) => {
+        if (!screenId || !screens[screenId]) return;
+        const screenName = screens[screenId].name;
+
+        try {
+            const screenRef = doc(db, getCollectionPath('screens'), screenId);
+            await deleteDoc(screenRef);
+            
+            const flowsToDelete = flows.filter(f => f.sourceId === screenId || f.targetId === screenId);
+            const deletePromises = flowsToDelete.map(flow => {
+                const flowRef = doc(db, getCollectionPath('flows'), flow.id);
+                return deleteDoc(flowRef);
+            });
+            await Promise.all(deletePromises);
+
+            alertMessage(`Скриншот "${screenName}" удален.`, 'success');
+        } catch (e) {
+            console.error("Ошибка удаления:", e);
+            alertMessage("Ошибка при удалении.", 'error');
+        }
+    };
+
+    // --- УПРАВЛЕНИЕ ХОЛСТОМ ---
+
+    const nodeSizes = {
+        's': { width: 100, height: 120 },
+        'm': { width: 126, height: 313 }, 
+        'l': { width: 328, height: 828 } 
+    };
+    
+    const updateScreenPosition = async (screenId, x, y) => {
+        try {
+            const screenRef = doc(db, getCollectionPath('screens'), screenId);
+            await updateDoc(screenRef, { x, y });
+        } catch (e) { console.error(e); }
+    };
+
+    window.changeScreenLockStatus = async (screenId, isLocked) => {
+        try {
+            const screenRef = doc(db, getCollectionPath('screens'), screenId);
+            await updateDoc(screenRef, { isLocked: !isLocked });
+            alertMessage(`Скриншот ${!isLocked ? 'зафиксирован' : 'разблокирован'}!`, 'success');
+        } catch (e) { console.error(e); }
+    };
+
+    window.changeScreenSize = async (screenId, direction) => {
+        const screen = screens[screenId];
+        if (!screen) return;
+        const currentIndex = sizeOrder.indexOf(screen.size);
+        let nextIndex = currentIndex;
+        if (direction === 'up' && currentIndex < sizeOrder.length - 1) nextIndex++;
+        else if (direction === 'down' && currentIndex > 0) nextIndex--;
+        else return;
+
+        const newSize = sizeOrder[nextIndex];
+        try {
+            const screenRef = doc(db, getCollectionPath('screens'), screenId);
+            await updateDoc(screenRef, { size: newSize });
+        } catch (e) { console.error(e); }
+    };
+    
+    // --- DRAW MODE / INTERACTION ---
+    
+    window.toggleDrawMode = () => {
+        isDrawMode = !isDrawMode;
+        drawingSourceId = null;
+        const toggleBtn = document.getElementById('draw-mode-toggle');
+        const statusText = document.getElementById('draw-mode-status');
+        const canvas = canvasArea();
+
+        if (isDrawMode) {
+            toggleBtn.textContent = 'Выключить режим соединения';
+            toggleBtn.classList.replace('bg-yellow-500', 'bg-red-500');
+            toggleBtn.classList.replace('hover:bg-yellow-600', 'hover:bg-red-600');
+            statusText.textContent = 'Текущий режим: Соединение (Кликните Source)';
+            statusText.classList.replace('text-yellow-700', 'text-red-700');
+            canvas.classList.add('draw-mode');
+        } else {
+            toggleBtn.textContent = 'Включить режим соединения';
+            toggleBtn.classList.replace('bg-red-500', 'bg-yellow-500');
+            toggleBtn.classList.replace('hover:bg-red-600', 'hover:bg-yellow-600');
+            statusText.textContent = 'Текущий режим: Панорамирование';
+            statusText.classList.replace('text-red-700', 'text-yellow-700');
+            canvas.classList.remove('draw-mode');
+            hideTempLine();
+            document.querySelectorAll('.draw-source').forEach(node => node.classList.remove('draw-source'));
+        }
+    };
+    
+    window.handleDrawClick = (screenId) => {
+        if (!isDrawMode || !userId) return;
+        const statusText = document.getElementById('draw-mode-status');
+        
+        if (!drawingSourceId) {
+            drawingSourceId = screenId;
+            document.getElementById(screenId).classList.add('draw-source');
+            statusText.textContent = `Текущий режим: Соединение (Кликните Target)`;
+            showTempLine();
+        } else if (drawingSourceId === screenId) {
+            drawingSourceId = null;
+            document.getElementById(screenId).classList.remove('draw-source');
+            statusText.textContent = 'Текущий режим: Соединение (Кликните Source)';
+            hideTempLine();
+        } else {
+            currentTargetId = screenId;
+            openFlowModal();
+        }
+    };
+
+    const showTempLine = () => {
+        tempLineElement = document.getElementById('temp-line');
+        if (tempLineElement) tempLineElement.style.opacity = '1';
+    };
+    
+    const hideTempLine = () => {
+        tempLineElement = document.getElementById('temp-line');
+        if (tempLineElement) tempLineElement.style.opacity = '0';
+        drawingSourceId = null;
+        currentTargetId = null;
+    };
+    
+    // --- MODAL LOGIC ---
+    const openFlowModal = () => {
+        if (!drawingSourceId || !currentTargetId) return;
+        const modal = document.getElementById('flow-label-modal');
+        const info = document.getElementById('modal-flow-info');
+        info.innerHTML = `Создание перехода от **${screens[drawingSourceId].name}** к **${screens[currentTargetId].name}**.`;
+        document.getElementById('modal-flow-label-input').value = '';
+        modal.style.display = 'flex';
+    };
+    window.closeFlowModal = () => {
+        document.getElementById('flow-label-modal').style.display = 'none';
+        document.getElementById(drawingSourceId)?.classList.remove('draw-source');
+        hideTempLine();
+        toggleDrawMode(); 
+    };
+    
+    // --- PAN/ZOOM ---
+    
+    const workspace = () => document.getElementById('workspace');
+    const canvasArea = () => document.getElementById('canvas-area');
+    const trashArea = () => document.getElementById('trash-area');
+
+    const applyTransform = () => {
+        workspace().style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+        trashAreaRect = trashArea().getBoundingClientRect();
+        drawArrows(); 
+    };
+    
+    window.handlePanZoomStart = (e) => {
+        if (isDrawMode) return; 
+        if (e.button !== 0 || isDragging) return; 
+        isPanning = true;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        canvasArea().style.cursor = 'grabbing';
+    };
+    
+    const handlePanZoomMove = (e) => {
+        if (isDrawMode && drawingSourceId) {
+            const containerRect = canvasArea().getBoundingClientRect();
+            const sourceNode = document.getElementById(drawingSourceId);
+            if (!sourceNode) return;
+            const srcDims = nodeSizes[screens[drawingSourceId].size];
+            const x1 = screens[drawingSourceId].x + srcDims.width / 2;
+            const y1 = screens[drawingSourceId].y + srcDims.height / 2;
+            
+            const mouseWorkspaceX = (e.clientX - containerRect.left - translateX) / scale;
+            const mouseWorkspaceY = (e.clientY - containerRect.top - translateY) / scale;
+            
+            const tempLine = document.getElementById('temp-line');
+            if (tempLine) {
+                tempLine.setAttribute('x1', x1);
+                tempLine.setAttribute('y1', y1);
+                tempLine.setAttribute('x2', mouseWorkspaceX);
+                tempLine.setAttribute('y2', mouseWorkspaceY);
+                tempLine.setAttribute('stroke-width', 4 / scale);
+            }
+            return;
+        }
+        if (!isPanning) return;
+        const dx = e.clientX - panStartX;
+        const dy = e.clientY - panStartY;
+        translateX += dx;
+        translateY += dy;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        applyTransform();
+    };
+
+    const handlePanZoomEnd = () => {
+        if (isPanning) {
+            isPanning = false;
+            canvasArea().style.cursor = 'grab';
+        }
+    };
+    
+    window.handleZoom = (e) => {
+        e.preventDefault(); 
+        if (isDragging || isDrawMode) return;
+        const delta = e.deltaY * -0.005; 
+        const newScale = Math.min(Math.max(0.2, scale + delta), 3.0); 
+        const containerRect = canvasArea().getBoundingClientRect();
+        const mouseX = e.clientX - containerRect.left;
+        const mouseY = e.clientY - containerRect.top;
+        const scaleFactor = newScale / scale;
+        translateX = mouseX - (mouseX - translateX) * scaleFactor;
+        translateY = mouseY - (mouseY - translateY) * scaleFactor;
+        scale = newScale;
+        applyTransform();
+    };
+
+    const handleDragStart = (e, screenId) => {
+        if (isPanning || isDrawMode) return;
+        const screen = screens[screenId];
+        if (!userId || screen.isLocked) return; 
+        isDragging = true;
+        activeNodeId = screenId;
+        const target = e.currentTarget;
+        const targetRect = target.getBoundingClientRect();
+        offsetX = (e.clientX - targetRect.left) / scale;
+        offsetY = (e.clientY - targetRect.top) / scale;
+        target.style.zIndex = 20; 
+        const trash = trashArea();
+        trash.style.opacity = '1';
+        trash.style.pointerEvents = 'auto';
+        trashAreaRect = trash.getBoundingClientRect();
+    };
+
+    const handleDragMove = (e) => {
+        if (isDrawMode && drawingSourceId) {
+            handlePanZoomMove(e); 
+            return;
+        }
+        if (!isDragging || !activeNodeId) {
+            handlePanZoomMove(e); 
+            return;
+        }
+        const target = document.getElementById(activeNodeId);
+        if (!target) return;
+        const canvasRect = document.getElementById('canvas-area-container').getBoundingClientRect();
+        const mouseWorkspaceX = (e.clientX - canvasRect.left - translateX) / scale;
+        const mouseWorkspaceY = (e.clientY - canvasRect.top - translateY) / scale;
+        let newX = mouseWorkspaceX - offsetX;
+        let newY = mouseWorkspaceY - offsetY;
+        target.style.left = `${newX}px`;
+        target.style.top = `${newY}px`;
+        drawArrows(); 
+        
+        if (trashAreaRect) {
+            const nodeRect = target.getBoundingClientRect();
+            const isColliding = !(
+                nodeRect.right < trashAreaRect.left || 
+                nodeRect.left > trashAreaRect.right || 
+                nodeRect.bottom < trashAreaRect.top || 
+                nodeRect.top > trashAreaRect.bottom
+            );
+            const trash = trashArea();
+            if (isColliding && !isOverTrash) {
+                isOverTrash = true;
+                trash.classList.replace('border-gray-400', 'border-red-500');
+                trash.classList.replace('bg-gray-200/50', 'bg-red-400/70');
+                trash.classList.add('scale-105');
+            } else if (!isColliding && isOverTrash) {
+                isOverTrash = false;
+                trash.classList.replace('border-red-500', 'border-gray-400');
+                trash.classList.replace('bg-red-400/70', 'bg-gray-200/50');
+                trash.classList.remove('scale-105');
+            }
+        }
+    };
+
+    const handleDragEnd = () => {
+        const trash = trashArea();
+        if (isDragging && activeNodeId) {
+            if (isOverTrash) {
+                window.deleteScreen(activeNodeId);
+            } else {
+                const target = document.getElementById(activeNodeId);
+                if (target) {
+                    updateScreenPosition(activeNodeId, parseFloat(target.style.left), parseFloat(target.style.top));
+                }
+            }
+        }
+        isDragging = false;
+        activeNodeId = null;
+        isOverTrash = false;
+        trashAreaRect = null;
+        trash.style.opacity = '0';
+        trash.style.pointerEvents = 'none';
+        trash.classList.replace('border-red-500', 'border-gray-400');
+        trash.classList.replace('bg-red-400/70', 'bg-gray-200/50');
+        trash.classList.remove('scale-105');
+        document.querySelectorAll('.screen-node').forEach(node => node.style.zIndex = 10);
+    };
+
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+    document.addEventListener('mouseup', handlePanZoomEnd);
+
+    // --- HELPERS ---
+    const getDirectImageUrl = (url) => {
+        if (url.match(/\.(jpe?g|png|gif|webp|svg)(\?.*)?$/i)) return url;
+        if (url.includes('imgur.com')) {
+            if (url.includes('/a/')) {
+                console.error(`[IMGUR Album Error] ${url}`);
+                return url; 
+            }
+            const match = url.match(/imgur\.com\/([a-zA-Z0-9]+)$/i);
+            if (match && match[1]) return `https://i.imgur.com/${match[1]}.png`;
+        }
+        return url;
+    };
+    
+    // --- RENDER ---
+    const renderCanvas = () => {
+        const workspaceElement = workspace();
+        let svg = document.getElementById('arrow-svg');
+        if (!svg) {
+            svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute('id', 'arrow-svg');
+            workspaceElement.appendChild(svg);
+        }
+        let defs = svg.querySelector('defs') || document.createElementNS("http://www.w3.org/2000/svg", "defs");
+        if (!svg.contains(defs)) svg.appendChild(defs);
+
+        // Clean nodes
+        workspaceElement.querySelectorAll('.screen-node, .flow-label').forEach(el => el.remove());
+        
+        // Re-add markers/temp line
+        let marker = document.getElementById('arrowhead');
+        if (!marker) { /* Create standard marker... */ 
+            marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+            marker.setAttribute('id', 'arrowhead');
+            marker.setAttribute('markerWidth', 10);
+            marker.setAttribute('markerHeight', 7);
+            marker.setAttribute('refX', 8);
+            marker.setAttribute('refY', 3.5);
+            marker.setAttribute('orient', 'auto');
+            const p = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            p.setAttribute('points', '0 0, 10 3.5, 0 7');
+            p.setAttribute('fill', '#6b7280');
+            marker.appendChild(p);
+            defs.appendChild(marker);
+        }
+        let tempMarker = document.getElementById('arrowhead-temp');
+        if (!tempMarker) { /* Create temp marker... */
+            tempMarker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+            tempMarker.setAttribute('id', 'arrowhead-temp');
+            tempMarker.setAttribute('markerWidth', 10);
+            tempMarker.setAttribute('markerHeight', 7);
+            tempMarker.setAttribute('refX', 8);
+            tempMarker.setAttribute('refY', 3.5);
+            tempMarker.setAttribute('orient', 'auto');
+            const p = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            p.setAttribute('points', '0 0, 10 3.5, 0 7');
+            p.setAttribute('fill', '#f59e0b');
+            tempMarker.appendChild(p);
+            defs.appendChild(tempMarker);
+        }
+        let tempLine = document.getElementById('temp-line');
+        if (!tempLine) {
+            tempLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            tempLine.setAttribute('id', 'temp-line');
+            tempLine.style.pointerEvents = 'none';
+            svg.appendChild(tempLine);
+        }
+        tempLine.setAttribute('stroke', '#f59e0b');
+        tempLine.setAttribute('stroke-width', 4);
+        tempLine.setAttribute('marker-end', 'url(#arrowhead-temp)');
+        tempLine.style.opacity = isDrawMode && drawingSourceId ? '1' : '0';
+
+        const screenCount = Object.keys(screens).length;
+        const canvasAreaElement = canvasArea();
+        let message = canvasAreaElement.querySelector('.no-screens-message');
+
+        if (screenCount === 0) {
+            if (!message) {
+                message = document.createElement('div');
+                message.className = 'no-screens-message absolute inset-0 flex items-center justify-center text-gray-500 text-xl font-medium pointer-events-none';
+                message.textContent = 'Нет скриншотов в этом проекте.';
+                canvasAreaElement.appendChild(message);
+            }
+            applyTransform();
+            return;
+        } else if (message) message.remove();
+
+        let maxBottom = 200;
+
+        Object.values(screens).forEach(screen => {
+            const node = document.createElement('div');
+            node.id = screen.id;
+            node.onclick = (e) => { e.stopPropagation(); window.handleDrawClick(screen.id); };
+            node.className = 'screen-node flex flex-col justify-between p-1';
+            if (drawingSourceId === screen.id) node.classList.add('draw-source');
+            node.style.left = `${screen.x}px`;
+            node.style.top = `${screen.y}px`;
+            node.setAttribute('data-screen-id', screen.id);
+            if (screen.size === 's') node.classList.add('size-s');
+            if (screen.size === 'l') node.classList.add('size-l');
+            if (screen.isLocked) node.classList.add('locked');
+            
+            if (!screen.isLocked && !isDrawMode) {
+                node.onmousedown = (e) => { e.stopPropagation(); handleDragStart(e, screen.id); };
+            }
+
+            const contentWrapper = document.createElement('div');
+            contentWrapper.className = 'relative flex-grow';
+
+            const img = document.createElement('img');
+            img.className = 'screen-image';
+            const directUrl = getDirectImageUrl(screen.url);
+            if (directUrl && (directUrl.startsWith('http') || directUrl.startsWith('https'))) {
+                img.src = directUrl;
+            } else {
+                img.src = `https://placehold.co/126x273/bdbdbd/ffffff?text=${encodeURIComponent(screen.name.substring(0, 10))}`;
+            }
+            img.onerror = () => {
+                 img.src = `https://placehold.co/126x273/bdbdbd/ffffff?text=Error`;
+            };
+            img.alt = screen.name;
+
+            const controlsDiv = document.createElement('div');
+            controlsDiv.className = 'absolute top-0 right-0 p-1 flex space-x-0.5 bg-white bg-opacity-70 rounded-bl-lg';
+            const baseClasses = 'w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shadow-md transition';
+            
+            // Delete
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = `${baseClasses} bg-red-600 text-white hover:bg-red-700`;
+            deleteBtn.onclick = (e) => { e.stopPropagation(); window.deleteScreen(screen.id); };
+            deleteBtn.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>`;
+            controlsDiv.appendChild(deleteBtn);
+
+            // Lock
+            const lockBtn = document.createElement('button');
+            lockBtn.className = `${baseClasses} ${screen.isLocked ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-400 text-white hover:bg-gray-500'}`;
+            lockBtn.onclick = (e) => { e.stopPropagation(); window.changeScreenLockStatus(screen.id, screen.isLocked); };
+            lockBtn.innerHTML = screen.isLocked 
+                ? `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v3h8z"></path></svg>`
+                : `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0v4M6 15h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2a2 2 0 012-2z"></path></svg>`;
+            controlsDiv.appendChild(lockBtn);
+
+            if (screen.size !== 's') {
+                const btnMinus = document.createElement('button');
+                btnMinus.className = `${baseClasses} bg-red-500 text-white hover:bg-red-600`;
+                btnMinus.textContent = '–'; 
+                btnMinus.onclick = (e) => { e.stopPropagation(); window.changeScreenSize(screen.id, 'down'); };
+                controlsDiv.appendChild(btnMinus);
+            }
+            if (screen.size !== 'l') {
+                const btnPlus = document.createElement('button');
+                btnPlus.className = `${baseClasses} bg-green-500 text-white hover:bg-green-600`;
+                btnPlus.textContent = '+';
+                btnPlus.onclick = (e) => { e.stopPropagation(); window.changeScreenSize(screen.id, 'up'); };
+                controlsDiv.appendChild(btnPlus);
+            }
+            
+            contentWrapper.appendChild(img);
+            contentWrapper.appendChild(controlsDiv);
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'screen-name truncate mt-1';
+            nameDiv.textContent = screen.name;
+            node.appendChild(contentWrapper);
+            node.appendChild(nameDiv);
+            workspaceElement.appendChild(node);
+            
+            const currentDims = nodeSizes[screen.size];
+            maxBottom = Math.max(maxBottom, screen.y + currentDims.height);
+        });
+        applyTransform();
+        canvasArea().style.minHeight = `${maxBottom * scale + 50}px`;
+    };
+
+    const drawArrows = () => {
+        const svg = document.getElementById('arrow-svg');
+        if (!svg) return;
+        svg.querySelectorAll('line:not(#temp-line), text, rect').forEach(el => el.remove());
+        const tempLine = document.getElementById('temp-line');
+        if (tempLine && !svg.contains(tempLine)) svg.appendChild(tempLine);
+
+        flows.forEach(flow => {
+            const sourceNode = document.getElementById(flow.sourceId);
+            const targetNode = document.getElementById(flow.targetId);
+            if (!sourceNode || !targetNode) return;
+
+            const srcDims = nodeSizes[screens[flow.sourceId].size];
+            const trgDims = nodeSizes[screens[flow.targetId].size];
+            const x1 = screens[flow.sourceId].x + srcDims.width / 2;
+            const y1 = screens[flow.sourceId].y + srcDims.height / 2;
+            const x2 = screens[flow.targetId].x + trgDims.width / 2;
+            const y2 = screens[flow.targetId].y + trgDims.height / 2;
+            const [finalX2, finalY2] = getIntersectionPoint(x1, y1, x2, y2, trgDims.width / 2, trgDims.height / 2);
+            
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute('x1', x1);
+            line.setAttribute('y1', y1);
+            line.setAttribute('x2', finalX2);
+            line.setAttribute('y2', finalY2);
+            line.setAttribute('stroke', '#6b7280');
+            line.setAttribute('stroke-width', 2 / scale); 
+            line.setAttribute('marker-end', 'url(#arrowhead)');
+            svg.appendChild(line);
+            
+            const labelX = (x1 + finalX2) / 2;
+            const correctedMidpointY = (y1 + finalY2) / 2;
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            const textLength = flow.label.length * 5 + 4; 
+            rect.setAttribute('x', labelX - (textLength / 2) / scale);
+            rect.setAttribute('y', correctedMidpointY - (15 / scale));
+            rect.setAttribute('width', textLength / scale);
+            rect.setAttribute('height', 15 / scale);
+            rect.setAttribute('fill', '#f7f9fb');
+            rect.setAttribute('rx', 3 / scale);
+            svg.appendChild(rect);
+
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute('x', labelX);
+            text.setAttribute('y', correctedMidpointY - 5 / scale); 
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('font-size', 10 / scale); 
+            text.setAttribute('fill', '#1f2937');
+            text.textContent = flow.label;
+            svg.appendChild(text);
+        });
+    };
+    
+    const getIntersectionPoint = (x1, y1, x2, y2, w2, h2) => {
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const distance = Math.min(w2 / Math.abs(Math.cos(angle)), h2 / Math.abs(Math.sin(angle)));
+        const offset = distance - 8; 
+        const finalX = x2 - offset * Math.cos(angle);
+        const finalY = y2 - offset * Math.sin(angle);
+        return [finalX, finalY];
+    };
+    
+    const alertMessage = (message, type) => {
+        const container = document.getElementById('canvas-area-container');
+        let alert = document.getElementById('temp-alert');
+        if (!alert) {
+            alert = document.createElement('div');
+            alert.id = 'temp-alert';
+            alert.className = 'absolute top-4 right-4 p-3 rounded-lg text-sm font-semibold shadow-xl transition-opacity duration-300 opacity-0';
+            alert.style.zIndex = 100;
+            container.appendChild(alert);
+        }
+        alert.textContent = message;
+        if (type === 'success') {
+            alert.className = alert.className.replace(/bg-(red|yellow)-|text-(red|yellow)-/g, '').trim() + ' bg-green-500 text-white';
+        } else if (type === 'error') {
+            alert.className = alert.className.replace(/bg-(green|yellow)-|text-(green|yellow)-/g, '').trim() + ' bg-red-500 text-white';
+        }
+        alert.classList.remove('opacity-0');
+        alert.classList.add('opacity-100');
+        setTimeout(() => {
+            alert.classList.remove('opacity-100');
+            alert.classList.add('opacity-0');
+        }, 3000);
+    };
+
+    initFirebase();
+    
+    window.updateScreenPosition = updateScreenPosition; 
+    window.drawArrows = drawArrows; 
+</script>
+
+</body>
+</html>
