@@ -301,9 +301,24 @@
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
     import { getFirestore, doc, collection, query, onSnapshot, updateDoc, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    // Глобальные переменные
+    // Глобальные переменные из Canvas Environment (для локальной разработки заполните firebaseConfig ниже)
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+    
+    // ВНИМАНИЕ: Для запуска на ВНЕШНЕМ сервере, замените данные ниже на вашу конфигурацию Firebase!
+    const customFirebaseConfig = {
+        apiKey: "AIzaSyDLL0XdOi1FuBPipMcTZVokIijcgYw--wU",
+        authDomain: "screen-database-442ea.firebaseapp.com",
+        projectId: "screen-database-442ea",
+        storageBucket: "screen-database-442ea.firebasestorage.app",
+        messagingSenderId: "1084761910892",
+        appId: "1:1084761910892:web:e812c4aced9ba11923b249"
+    };
+
+    // Используем глобальную переменную если она есть (внутри Canvas), иначе используем customFirebaseConfig
+    const firebaseConfig = (typeof __firebase_config !== 'undefined' && __firebase_config) 
+        ? JSON.parse(__firebase_config) 
+        : customFirebaseConfig;
+
     const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
     let app, db, auth, userId = null;
@@ -347,6 +362,12 @@
     // --- FIREBASE ИНИЦИАЛИЗАЦИЯ ---
     const initFirebase = async () => {
         try {
+            if (!firebaseConfig || !firebaseConfig.apiKey || firebaseConfig.apiKey === 'API_KEY_HERE') {
+                document.getElementById('auth-status').textContent = 'Ошибка: Нет конфига Firebase';
+                alert("Для работы на внешнем сервере необходимо заполнить firebaseConfig в коде (строка ~430)!");
+                return;
+            }
+
             app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
@@ -383,7 +404,10 @@
     };
 
     const loadData = () => {
-        if (!userId) return;
+        if (!userId || !db) {
+             console.error("База данных не инициализирована или нет пользователя");
+             return;
+        }
 
         // 1. Подписка на Проекты
         const projectsColRef = collection(db, getCollectionPath('projects'));
